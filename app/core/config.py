@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
 
+    # Azure Document Intelligence
+    AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: str = ""
+    AZURE_DOCUMENT_INTELLIGENCE_KEY: str = ""
+
     # App
     CORS_ORIGINS: str = "https://formcraft.iron-sys.com,http://localhost:4200"
     LOG_LEVEL: str = "info"

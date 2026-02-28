@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -10,37 +11,48 @@ from app.models.user import UserProfile
 from app.schemas.auth import LoginRequest, LoginResponse, RefreshRequest, RegisterRequest
 from app.services.user_service import UserService
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 @router.post("/login", response_model=LoginResponse)
 async def login(body: LoginRequest, request: Request):
     """Authenticate user via Supabase Auth and return JWT tokens."""
+    client_ip = request.client.host if request.client else None
+    logger.info("login_attempt", extra={"email": body.email, "ip_address": client_ip})
     client = get_supabase_client()
     try:
         response = client.auth.sign_in_with_password(
             {"email": body.email, "password": body.password}
         )
     except Exception:
+        logger.warning(
+            "login_failed",
+            extra={"email": body.email, "ip_address": client_ip},
+        )
         audit = AuditLogger(client)
         await audit.log_event(
             user_id="00000000-0000-0000-0000-000000000000",
             action="auth_login_failed",
             resource_type="auth",
             metadata={"email": body.email},
-            ip_address=request.client.host if request.client else None,
+            ip_address=client_ip,
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
 
+    logger.info(
+        "login_succeeded",
+        extra={"user_id": response.user.id, "ip_address": client_ip},
+    )
     audit = AuditLogger(client)
     await audit.log_event(
         user_id=response.user.id,
         action="auth_login",
         resource_type="auth",
-        ip_address=request.client.host if request.client else None,
+        ip_address=client_ip,
     )
     return LoginResponse(
         access_token=response.session.access_token,

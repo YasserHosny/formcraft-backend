@@ -1,7 +1,11 @@
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 from supabase import Client
+
+
+logger = logging.getLogger(__name__)
 
 
 class AuditLogger:
@@ -31,8 +35,16 @@ class AuditLogger:
         }
         try:
             asyncio.create_task(self._write(entry))
+            logger.info(
+                "audit_log_enqueued",
+                extra={"action": action, "resource_type": resource_type, "user_id": user_id},
+            )
         except Exception:
-            pass  # Audit failure must never block primary operation
+            logger.warning(
+                "audit_log_enqueue_failed",
+                extra={"action": action, "resource_type": resource_type, "user_id": user_id},
+            )
 
     async def _write(self, entry: dict) -> None:
         self.client.table("audit_logs").insert(entry).execute()
+        logger.debug("audit_log_written", extra={"action": entry.get("action")})

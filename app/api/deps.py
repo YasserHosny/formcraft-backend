@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -8,12 +9,22 @@ from app.core.supabase import get_supabase_client
 from app.models.enums import Role
 from app.models.user import UserProfile
 
+logger = logging.getLogger(__name__)
+
 
 async def get_current_user(
-    authorization: Annotated[str, Header()],
+    authorization: Annotated[str | None, Header()] = None,
 ) -> UserProfile:
     """Extract and verify JWT, then load the user profile from Supabase."""
+    logger.debug(f"get_current_user called, authorization: {authorization}")
+    if not authorization:
+        logger.warning("Missing Authorization header")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authorization header",
+        )
     if not authorization.startswith("Bearer "):
+        logger.warning(f"Invalid auth header format: {authorization[:50]}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authorization header format",
