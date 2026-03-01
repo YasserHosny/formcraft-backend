@@ -82,6 +82,34 @@ class FieldClassifier:
         logger.debug(f"Classified as text: {text}")
         return "text"
 
+    def is_probable_label(self, text: str, bbox: dict) -> bool:
+        """Heuristic to skip label-like words (not fillable inputs)."""
+        cleaned = text.strip()
+        if not cleaned:
+            return True
+
+        lower = cleaned.lower()
+        if any(ind.lower() in lower for ind in DATE_INDICATORS_AR):
+            return True
+        if any(ind.lower() in lower for ind in CURRENCY_INDICATORS_AR):
+            return True
+        if any(ind.lower() in lower for ind in NAME_INDICATORS_AR):
+            return True
+        if any(ind.lower() in lower for ind in SIGNATURE_INDICATORS_AR):
+            return True
+
+        # Mostly alphabetic, short words are likely labels
+        if re.fullmatch(r"[A-Za-z\u0600-\u06FF\s]+", cleaned):
+            if len(cleaned) <= 12:
+                return True
+
+            width = bbox.get("width", 0)
+            height = bbox.get("height", 0)
+            if width <= 25 and height <= 8:
+                return True
+
+        return False
+
     def _is_date_field(self, text: str, nearby_text: str) -> bool:
         """Check if field is a date."""
         # Check nearby labels for date indicators

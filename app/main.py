@@ -8,7 +8,7 @@ from slowapi.errors import RateLimitExceeded
 from app.core.config import settings
 from app.core.middleware.rate_limit import limiter
 from app.core.middleware.security_headers import SecurityHeadersMiddleware
-from app.api.routes import auth, users, templates, ai, pdf, health, admin
+from app.api.routes import auth, users, templates, ai, pdf, health, admin, forms
 
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 logger = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api")
     app.include_router(users.router, prefix="/api")
     app.include_router(templates.router, prefix="/api")
+    app.include_router(forms.router, prefix="/api")
     app.include_router(ai.router, prefix="/api")
     app.include_router(pdf.router, prefix="/api")
     app.include_router(admin.router, prefix="/api")
