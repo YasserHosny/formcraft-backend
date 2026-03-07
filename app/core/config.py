@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "info"
     APP_VERSION: str = "0.1.0"
     DEV_ALLOW_LOCAL_IMPORT: bool = False
+    DEV_LOCAL_IMPORT_PATH: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

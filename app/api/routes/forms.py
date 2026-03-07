@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 
 class LocalImportRequest(BaseModel):
-    path: str = Field(description="Absolute path to local image file")
     page_index: int = Field(0, ge=0)
 
 
@@ -166,7 +165,13 @@ async def import_form_local(
             detail="Local import disabled",
         )
 
-    file_path = Path(body.path)
+    if not settings.DEV_LOCAL_IMPORT_PATH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Local import path not configured",
+        )
+
+    file_path = Path(settings.DEV_LOCAL_IMPORT_PATH)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
