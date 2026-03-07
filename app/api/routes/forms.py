@@ -1,11 +1,14 @@
 """Form import and OCR detection endpoints."""
 
 import logging
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_user, require_role
+from app.core.config import settings
 from app.core.supabase import get_supabase_client
 from app.models.enums import ElementType, Role
 from app.models.form_detection import (
@@ -19,6 +22,92 @@ from app.services.template_service import TemplateService
 
 router = APIRouter(prefix="/forms", tags=["Forms"])
 logger = logging.getLogger(__name__)
+
+
+class LocalImportRequest(BaseModel):
+    path: str = Field(description="Absolute path to local image file")
+    page_index: int = Field(0, ge=0)
+
+
+def _process_import(template_id: UUID, image_bytes: bytes, page_index: int) -> FormDetectionResponse:
+    ocr_client = AzureOCRClient()
+    ocr_result = ocr_client.analyze_layout(image_bytes)
+
+    if not ocr_result.get("page_dimensions"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not detect page dimensions from image",
+        )
+
+    page_dims = ocr_result["page_dimensions"]
+    dpi = BoundingBoxConverter.detect_dpi_from_exif(image_bytes)
+    converter = BoundingBoxConverter(
+        image_width_px=int(page_dims["width"]),
+        image_height_px=int(page_dims["height"]),
+        dpi=dpi,
+    )
+
+    classifier = FieldClassifier()
+    detected_fields: list[DetectedField] = []
+    words = ocr_result.get("words", [])
+
+    for word in words:
+        bbox_mm = converter.convert_bbox(word["bbox"])
+        nearby_labels = classifier.get_nearby_labels(
+            word["bbox"], words, max_distance=100
+        )
+        suggested_type = classifier.classify_field(
+            text=word["text"], bbox=bbox_mm, nearby_labels=nearby_labels
+        )
+
+        if (
+            classifier.is_probable_label(word["text"], bbox_mm)
+            and suggested_type == "text"
+        ):
+            continue
+
+        detected_fields.append(
+            DetectedField(
+                text=word["text"],
+                bbox=bbox_mm,
+                confidence=word["confidence"],
+                suggested_type=suggested_type,
+                status="pending",
+            )
+        )
+
+    page_width_mm, page_height_mm = converter.get_page_dimensions_mm()
+    client = get_supabase_client()
+
+    insert_data = {
+        "template_id": str(template_id),
+        "page_index": page_index,
+        "detected_fields": [field.model_dump() for field in detected_fields],
+        "page_dimensions": {"width": page_width_mm, "height": page_height_mm},
+    }
+
+    response = client.table("form_detections").insert(insert_data).execute()
+    if not response.data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to store detection results",
+        )
+
+    detection_record = response.data[0]
+    logger.info(
+        "OCR complete: detected %s fields for template %s",
+        len(detected_fields),
+        template_id,
+    )
+
+    return FormDetectionResponse(
+        id=detection_record["id"],
+        template_id=template_id,
+        page_index=page_index,
+        detected_fields=detected_fields,
+        page_dimensions={"width": page_width_mm, "height": page_height_mm},
+        created_at=detection_record["created_at"],
+    )
 
 
 @router.post("/import/{template_id}", response_model=FormDetectionResponse)
@@ -49,84 +138,7 @@ async def import_form(
         )
 
     try:
-        ocr_client = AzureOCRClient()
-        ocr_result = ocr_client.analyze_layout(image_bytes)
-
-        if not ocr_result.get("page_dimensions"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Could not detect page dimensions from image",
-            )
-
-        page_dims = ocr_result["page_dimensions"]
-        dpi = BoundingBoxConverter.detect_dpi_from_exif(image_bytes)
-        converter = BoundingBoxConverter(
-            image_width_px=int(page_dims["width"]),
-            image_height_px=int(page_dims["height"]),
-            dpi=dpi,
-        )
-
-        classifier = FieldClassifier()
-        detected_fields: list[DetectedField] = []
-        words = ocr_result.get("words", [])
-
-        for word in words:
-            bbox_mm = converter.convert_bbox(word["bbox"])
-            nearby_labels = classifier.get_nearby_labels(
-                word["bbox"], words, max_distance=100
-            )
-            suggested_type = classifier.classify_field(
-                text=word["text"], bbox=bbox_mm, nearby_labels=nearby_labels
-            )
-
-            if (
-                classifier.is_probable_label(word["text"], bbox_mm)
-                and suggested_type == "text"
-            ):
-                continue
-
-            detected_fields.append(
-                DetectedField(
-                    text=word["text"],
-                    bbox=bbox_mm,
-                    confidence=word["confidence"],
-                    suggested_type=suggested_type,
-                    status="pending",
-                )
-            )
-
-        page_width_mm, page_height_mm = converter.get_page_dimensions_mm()
-        client = get_supabase_client()
-
-        insert_data = {
-            "template_id": str(template_id),
-            "page_index": page_index,
-            "detected_fields": [field.model_dump() for field in detected_fields],
-            "page_dimensions": {"width": page_width_mm, "height": page_height_mm},
-        }
-
-        response = client.table("form_detections").insert(insert_data).execute()
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to store detection results",
-            )
-
-        detection_record = response.data[0]
-        logger.info(
-            "OCR complete: detected %s fields for template %s",
-            len(detected_fields),
-            template_id,
-        )
-
-        return FormDetectionResponse(
-            id=detection_record["id"],
-            template_id=template_id,
-            page_index=page_index,
-            detected_fields=detected_fields,
-            page_dimensions={"width": page_width_mm, "height": page_height_mm},
-            created_at=detection_record["created_at"],
-        )
+        return _process_import(template_id, image_bytes, page_index)
     except ValueError as exc:
         logger.error("Configuration error: %s", exc)
         raise HTTPException(
@@ -138,6 +150,48 @@ async def import_form(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process form image: {exc}",
+        )
+
+
+@router.post("/import/local/{template_id}", response_model=FormDetectionResponse)
+async def import_form_local(
+    template_id: UUID,
+    body: LocalImportRequest,
+    current_user: UserProfile = Depends(require_role(Role.ADMIN, Role.DESIGNER)),
+):
+    """Dev-only local file import for OCR detection."""
+    if not settings.DEV_ALLOW_LOCAL_IMPORT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Local import disabled",
+        )
+
+    file_path = Path(body.path)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Local file not found",
+        )
+    if file_path.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file type. Only JPEG/PNG allowed.",
+        )
+
+    try:
+        image_bytes = file_path.read_bytes()
+        return _process_import(template_id, image_bytes, body.page_index)
+    except ValueError as exc:
+        logger.error("Configuration error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"OCR service configuration error: {exc}",
+        )
+    except Exception as exc:
+        logger.error("OCR processing error: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process local form image: {exc}",
         )
 
 

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "https://formcraft.iron-sys.com,http://localhost:4200"
     LOG_LEVEL: str = "info"
     APP_VERSION: str = "0.1.0"
+    DEV_ALLOW_LOCAL_IMPORT: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:
